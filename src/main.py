@@ -167,7 +167,18 @@ def train_on_step(
                                pos_vec, neg_vecs, his_vecs))
 
     # 创建训练数据集和数据加载器
-    train_dataset = TrainDataset(train_data, users, user_indices, nid2index, agg, news_index)
+    try:
+        train_dataset = TrainDataset(train_data, users, user_indices, nid2index, agg, news_index)
+    except TypeError as e:
+        print(f"Error creating TrainDataset: {e}")
+        print(f"train_data: {type(train_data)}")
+        print(f"users: {type(users)}")
+        print(f"user_indices: {type(user_indices)}")
+        print(f"nid2index: {type(nid2index)}")
+        print(f"agg: {type(agg)}")
+        print(f"news_index: {type(news_index)}")
+        raise
+
     train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
     # 定义优化器和学习率调度器（修改：添加weight_decay实现L2正则化）
@@ -394,7 +405,6 @@ if __name__ == "__main__":
         news_dataset = NewsDataset(news_index)
 
         agg = Aggregator(args, news_dataset, news_index, device)
-       # model = Model().to(device)
         # 初始化Model类时传入正则化系数
         model = Model(l1_reg=0.001, l2_reg=0.001).to(device)
         best_auc = 0
