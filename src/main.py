@@ -167,7 +167,7 @@ def train_on_step(
                                pos_vec, neg_vecs, his_vecs))
 
     # 创建训练数据集和数据加载器
-    train_dataset = TrainDataset(train_data)
+    train_dataset = TrainDataset(train_data, users, user_indices, nid2index, agg, news_index)
     train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
     # 定义优化器和学习率调度器（修改：添加weight_decay实现L2正则化）
