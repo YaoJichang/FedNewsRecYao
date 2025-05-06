@@ -396,7 +396,7 @@ if __name__ == "__main__":
         agg = Aggregator(args, news_dataset, news_index, device)
        # model = Model().to(device)
         # 初始化Model类时传入正则化系数
-        model = Model(lambda_reg=0.001).to(device)
+        model = Model(l1_reg=0.001, l2_reg=0.001).to(device)
         best_auc = 0
         # 初始化 random_ratio
         random_ratio = 0.8
