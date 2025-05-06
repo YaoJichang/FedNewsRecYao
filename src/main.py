@@ -167,18 +167,7 @@ def train_on_step(
                                pos_vec, neg_vecs, his_vecs))
 
     # 创建训练数据集和数据加载器
-    try:
-        train_dataset = TrainDataset(train_data, users, user_indices, nid2index, agg, news_index)
-    except TypeError as e:
-        print(f"Error creating TrainDataset: {e}")
-        print(f"train_data: {type(train_data)}")
-        print(f"users: {type(users)}")
-        print(f"user_indices: {type(user_indices)}")
-        print(f"nid2index: {type(nid2index)}")
-        print(f"agg: {type(agg)}")
-        print(f"news_index: {type(news_index)}")
-        raise
-
+    train_dataset = TrainDataset(args, train_sam, users, user_indices, nid2index, agg, news_index)
     train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
     # 定义优化器和学习率调度器（修改：添加weight_decay实现L2正则化）
