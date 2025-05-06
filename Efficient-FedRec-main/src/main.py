@@ -132,55 +132,63 @@ def compute_user_distribution_difference(user_data, model_distribution, nid2inde
 
 
 def train_on_step(
-        agg, model, args, user_indices, user_num, train_sam, nid2index, news_index, device, step, random_ratio
+    agg, model, args, user_indices, user_num, train_sam, nid2index, news_index, device, step,random_ratio
 ):
-    # 动态计算正则化系数（指数衰减法）
+    # 1. 动态计算正则化系数（指数衰减法）
     lambda_reg_init = 0.001  # 初始值
     decay_rate = 0.95  # 衰减率
     decay_steps = 100  # 衰减步数
     lambda_reg = lambda_reg_init * (decay_rate ** (step / decay_steps))
 
-    # 选择用户
-    users = random.sample(list(user_indices.keys()), k=min(args.user_num, len(user_indices)))
-    user_nids, user_sample = collect_users_nids(train_sam, users, user_indices, nid2index)
+    # 计算模型的新闻点击分布
+    model_distribution = np.zeros(len(nid2index))
+    for sample in train_sam:
+        _, pos, neg, his, _ = sample
+        for news_id in [pos] + neg + his:
+            if news_id in nid2index:
+                index = nid2index[news_id]
+                model_distribution[index] += 1
+    if np.sum(model_distribution) > 0:
+        model_distribution = model_distribution / np.sum(model_distribution)
 
-    # 生成新闻向量
-    news_vecs = agg.gen_news_vecs(user_nids)
-
-    # 准备训练数据
-    train_data = []
-    for user in users:
+    # 计算每个用户数据分布与模型的差异
+    user_differences = {}
+    for user in user_indices.keys():
         sids = user_indices[user]
+        user_data = []
         for idx in sids:
-            impression_id, pos, neg, his, user_id = train_sam[idx]
-            # 筛选历史新闻，只保留在user_nids中的新闻
-            filtered_his = [h for h in his if h in nid2index]
-            # 如果历史新闻太少，跳过此样本
-            if len(filtered_his) < 5:
-                continue
-            # 获取新闻向量
-            pos_vec = news_vecs[nid2index[pos]]
-            neg_vecs = [news_vecs[nid2index[n]] for n in neg]
-            his_vecs = [news_vecs[nid2index[h]] for h in filtered_his]
-            # 构建训练样本
-            train_data.append((impression_id, pos, neg, filtered_his, user_id,
-                               pos_vec, neg_vecs, his_vecs))
+            _, pos, neg, his, _ = train_sam[idx]
+            user_data.extend([pos] + neg + his)
+        difference = compute_user_distribution_difference(user_data, model_distribution, nid2index)
+        user_differences[user] = difference
 
-    # 创建训练数据集和数据加载器
-    train_dataset = TrainDataset(train_data, users, user_indices, nid2index, agg, news_index)
-    train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
+    # 根据差异值进行排序
+    sorted_users = sorted(user_differences.items(), key=lambda x: x[1], reverse=True)
 
-    # 定义优化器和学习率调度器（修改：添加weight_decay实现L2正则化）
-    optimizer = optim.SGD(
-        [
-            {"params": model.user_encoder.parameters(), "lr": args.user_lr},
-        ],
-        weight_decay=model.l2_reg  # L2正则化通过weight_decay实现
+    # 结合随机采样和数据分布感知采样
+    random_user_num = int(user_num * random_ratio)
+    diff_user_num = user_num - random_user_num
+
+    # 将 user_indices.keys() 转换为列表
+    user_list = list(user_indices.keys())
+    random_users = random.sample(user_list, random_user_num)
+    diff_users = [user[0] for user in sorted_users[:diff_user_num]]
+
+    users = random_users + diff_users
+
+    nids, user_sample = collect_users_nids(train_sam, users, user_indices, nid2index)
+
+    agg.gen_news_vecs(nids)
+    train_ds = TrainDataset(
+        args, train_sam, users, user_indices, nid2index, agg, news_index
     )
-    scheduler = StepLR(optimizer, step_size=100, gamma=0.1)
+    train_dl = DataLoader(train_ds, batch_size=16384, shuffle=True, num_workers=0)
+    model.train()
+    loss = 0
 
-    # 初始化损失
-    loss = 0.0
+    # 定义优化器和学习率调度器
+    optimizer = optim.SGD(model.parameters(), lr=args.user_lr)
+    scheduler = StepLR(optimizer, step_size=100, gamma=0.1)
 
     for cnt, batch_sample in enumerate(train_dl):
         model.user_encoder.load_state_dict(agg.user_encoder.state_dict())
@@ -192,11 +200,18 @@ def train_on_step(
 
         label = label.to(device)
 
-        # 计算用户模型和新闻表示的梯度
+        # compute gradients for user model and news representations
         candidate_news_vecs.requires_grad = True
         his_vecs.requires_grad = True
         bz_loss, y_hat = model(candidate_news_vecs, his_vecs, label)
 
+        regularization_loss = 0.0
+        # 遍历模型的参数，这里以user_encoder和text_encoder为例
+        for param in agg.text_encoder.parameters():
+            regularization_loss += torch.sum(torch.abs(param))  # L1正则化
+        for param in agg.user_encoder.parameters():
+            regularization_loss += torch.sum(torch.abs(param))  # L1正则化
+        bz_loss += lambda_reg * regularization_loss
         loss += bz_loss.detach().cpu().numpy()
 
         optimizer.zero_grad()
@@ -206,7 +221,7 @@ def train_on_step(
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         candaidate_grad = candidate_news_vecs.grad.detach().cpu() * (
-                sample_num / user_sample
+            sample_num / user_sample
         )
         candidate_vecs = candidate_news_vecs.detach().cpu().numpy()
         candidate_news = candidate_news.numpy()
@@ -231,6 +246,7 @@ def train_on_step(
     loss = loss / (cnt + 1)
     agg.update()
     return loss
+
 
 # 验证
 def validate(args, agg, valid_sam, nid2index, news_index, device):
@@ -394,12 +410,10 @@ if __name__ == "__main__":
         news_dataset = NewsDataset(news_index)
 
         agg = Aggregator(args, news_dataset, news_index, device)
-       # model = Model().to(device)
-        # 初始化Model类时传入正则化系数
-        model = Model(l1_reg=0.001, l2_reg=0.001).to(device)
+        model = Model().to(device)
         best_auc = 0
         # 初始化 random_ratio
-        random_ratio = 0.8
+        random_ratio = 0.2
         for step in range(args.max_train_steps):
             loss = train_on_step(
                 agg,
