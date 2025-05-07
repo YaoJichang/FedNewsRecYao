@@ -132,14 +132,8 @@ def compute_user_distribution_difference(user_data, model_distribution, nid2inde
 
 
 def train_on_step(
-    agg, model, args, user_indices, user_num, train_sam, nid2index, news_index, device, step,random_ratio
+    agg, model, args, user_indices, user_num, train_sam, nid2index, news_index, device, step, random_ratio, global_model
 ):
-    # 1. 动态计算正则化系数（指数衰减法） ---暂时移除 因为这是全局的正则化了
-    # lambda_reg_init = 0.001  # 初始值
-    # decay_rate = 0.95  # 衰减率
-    # decay_steps = 100  # 衰减步数
-    # lambda_reg = lambda_reg_init * (decay_rate ** (step / decay_steps))
-
     # 计算模型的新闻点击分布
     model_distribution = np.zeros(len(nid2index))
     for sample in train_sam:
@@ -187,7 +181,6 @@ def train_on_step(
     loss = 0
 
     # 定义优化器和学习率调度器
-    # 定义优化器和学习率调度器
     optimizer = optim.SGD(model.parameters(), lr=args.user_lr)
     scheduler = StepLR(optimizer, step_size=100, gamma=0.1)
 
@@ -204,7 +197,7 @@ def train_on_step(
         # compute gradients for user model and news representations
         candidate_news_vecs.requires_grad = True
         his_vecs.requires_grad = True
-        bz_loss, y_hat = model(candidate_news_vecs, his_vecs, label)
+        bz_loss, y_hat = model(candidate_news_vecs, his_vecs, label, global_model=global_model)
 
         loss += bz_loss.detach().cpu().numpy()
 
@@ -405,7 +398,8 @@ if __name__ == "__main__":
 
         agg = Aggregator(args, news_dataset, news_index, device)
         # 初始化Model类时传入正则化系数
-        model = Model(lambda_reg=0.001).to(device)
+        model = Model(lambda_reg=0.001, mu=0.01).to(device)
+        global_model = Model(lambda_reg=0.001, mu=0.01).to(device)
         best_auc = 0
         # 初始化 random_ratio
         random_ratio = 0.8
@@ -421,7 +415,8 @@ if __name__ == "__main__":
                 news_index,
                 device,
                 step,
-                random_ratio
+                random_ratio,
+                global_model
             )
 
             wandb.log({"train loss": loss}, step=step + 1)
@@ -465,6 +460,9 @@ if __name__ == "__main__":
 
                     with open(out_path / f"log.txt", "a") as f:
                         f.write(f"[{step}] round save model\n")
+
+            # 更新全局模型
+            global_model.load_state_dict(model.state_dict())
 
     elif args.mode == "test":
         data_path = Path(args.data_path) / args.data

@@ -192,15 +192,16 @@ class UserEncoder(nn.Module):
 
 # 推荐模型
 class Model(nn.Module):
-    def __init__(self, top_k=5, lambda_reg=0.001):
+    def __init__(self, top_k=5, lambda_reg=0.001, mu=0.01):
         super(Model, self).__init__()
         # 用户编码器，使用Top-K稀疏多头注意力机制
         self.user_encoder = UserEncoder(top_k=top_k)
         # 损失函数
         self.criterion = nn.CrossEntropyLoss()
         self.lambda_reg = lambda_reg  # 正则化系数
+        self.mu = mu  # pFedMe的L2正则化系数
 
-    def forward(self, candidate_vecs, clicked_news_vecs, targets, compute_loss=True):
+    def forward(self, candidate_vecs, clicked_news_vecs, targets, global_model=None, compute_loss=True):
         # 使用用户编码器生成用户表示
         user_vector = self.user_encoder(clicked_news_vecs)
         # 计算候选新闻和用户表示之间的匹配分数
@@ -208,12 +209,12 @@ class Model(nn.Module):
         # 如果需要计算损失，则计算交叉熵损失
         if compute_loss:
             loss = self.criterion(score, targets)
-            # 计算L1正则化损失
-            l1_reg = 0.0
-            for param in self.user_encoder.parameters():
-                l1_reg += torch.sum(torch.abs(param))
-            # 添加L1正则化项到原损失
-            loss += self.lambda_reg * l1_reg
+            # pFedMe的L2正则化项
+            if global_model is not None:
+                l2_reg = 0.0
+                for local_param, global_param in zip(self.user_encoder.parameters(), global_model.user_encoder.parameters()):
+                    l2_reg += torch.sum((local_param - global_param) ** 2)
+                loss += self.mu / 2 * l2_reg
             return loss, score
         else:
             return score
