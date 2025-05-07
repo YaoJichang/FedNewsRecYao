@@ -134,7 +134,7 @@ def compute_user_distribution_difference(user_data, model_distribution, nid2inde
 def train_on_step(
     agg, model, args, user_indices, user_num, train_sam, nid2index, news_index, device, step,random_ratio
 ):
-    # 1. 动态计算正则化系数（指数衰减法）
+    # 1. 动态计算正则化系数（指数衰减法） ---暂时移除 因为这是全局的正则化了
     # lambda_reg_init = 0.001  # 初始值
     # decay_rate = 0.95  # 衰减率
     # decay_steps = 100  # 衰减步数
@@ -186,6 +186,7 @@ def train_on_step(
     model.train()
     loss = 0
 
+    # 定义优化器和学习率调度器
     # 定义优化器和学习率调度器
     optimizer = optim.SGD(model.parameters(), lr=args.user_lr)
     scheduler = StepLR(optimizer, step_size=100, gamma=0.1)
@@ -403,7 +404,6 @@ if __name__ == "__main__":
         news_dataset = NewsDataset(news_index)
 
         agg = Aggregator(args, news_dataset, news_index, device)
-        model = Model().to(device)
         # 初始化Model类时传入正则化系数
         model = Model(lambda_reg=0.001).to(device)
         best_auc = 0
