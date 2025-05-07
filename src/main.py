@@ -170,6 +170,23 @@ def train_on_step(
 
     users = random_users + diff_users
 
+    # 为不同的用户分配不同的 mu 值
+    mu_values = {}
+    default_mu = 0.01  # 默认 mu 值
+
+    # 随机采样的用户使用默认 mu 值
+    for user in random_users:
+        mu_values[user] = default_mu
+
+    # 数据感知采样的用户根据排序位置调整 mu 值
+    max_mu = 0.1  # 最大的 mu 值
+    min_mu = 0.001  # 最小的 mu 值
+    for i, user in enumerate(diff_users):
+        # 根据用户的排序位置线性调整 mu 值
+        mu = max_mu - (max_mu - min_mu) * (i / len(diff_users))
+        mu_values[user] = mu
+
+
     nids, user_sample = collect_users_nids(train_sam, users, user_indices, nid2index)
 
     agg.gen_news_vecs(nids)
@@ -398,8 +415,8 @@ if __name__ == "__main__":
 
         agg = Aggregator(args, news_dataset, news_index, device)
         # 初始化Model类时传入正则化系数
-        model = Model(lambda_reg=0.001, mu=0.01).to(device)
-        global_model = Model(lambda_reg=0.001, mu=0.01).to(device)
+        model = Model(mu=0.01).to(device)
+        global_model = Model(mu=0.01).to(device)
         best_auc = 0
         # 初始化 random_ratio
         random_ratio = 0.8
