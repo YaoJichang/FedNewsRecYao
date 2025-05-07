@@ -192,10 +192,11 @@ class UserEncoder(nn.Module):
 
 # 推荐模型
 class Model(nn.Module):
-    def __init__(self, top_k=5):
+    def __init__(self, top_k=5, mu = None):
         super(Model, self).__init__()
         self.user_encoder = UserEncoder(top_k=top_k)
         self.criterion = nn.CrossEntropyLoss()
+        self.mu = mu
 
     def forward(self, candidate_vecs, clicked_news_vecs, targets, global_model=None, mu=None, compute_loss=True):
         user_vector = self.user_encoder(clicked_news_vecs)
