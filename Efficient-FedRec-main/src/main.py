@@ -132,14 +132,8 @@ def compute_user_distribution_difference(user_data, model_distribution, nid2inde
 
 
 def train_on_step(
-    agg, model, args, user_indices, user_num, train_sam, nid2index, news_index, device, step,random_ratio
+    agg, model, args, user_indices, user_num, train_sam, nid2index, news_index, device, step, random_ratio, global_model
 ):
-    # 1. 动态计算正则化系数（指数衰减法）
-    lambda_reg_init = 0.001  # 初始值
-    decay_rate = 0.95  # 衰减率
-    decay_steps = 100  # 衰减步数
-    lambda_reg = lambda_reg_init * (decay_rate ** (step / decay_steps))
-
     # 计算模型的新闻点击分布
     model_distribution = np.zeros(len(nid2index))
     for sample in train_sam:
@@ -176,6 +170,23 @@ def train_on_step(
 
     users = random_users + diff_users
 
+    # 为不同的用户分配不同的 mu 值
+    mu_values = {}
+    default_mu = 0.0001  # 默认 mu 值
+
+    # 随机采样的用户使用默认 mu 值
+    for user in random_users:
+        mu_values[user] = default_mu
+
+    # 数据感知采样的用户根据排序位置调整 mu 值
+    max_mu = 0.0001  # 最大的 mu 值
+    min_mu = 0.00001  # 最小的 mu 值
+    for i, user in enumerate(diff_users):
+        # 根据用户的排序位置线性调整 mu 值
+        mu = max_mu - (max_mu - min_mu) * (i / len(diff_users))
+        mu_values[user] = mu
+
+
     nids, user_sample = collect_users_nids(train_sam, users, user_indices, nid2index)
 
     agg.gen_news_vecs(nids)
@@ -203,15 +214,8 @@ def train_on_step(
         # compute gradients for user model and news representations
         candidate_news_vecs.requires_grad = True
         his_vecs.requires_grad = True
-        bz_loss, y_hat = model(candidate_news_vecs, his_vecs, label)
+        bz_loss, y_hat = model(candidate_news_vecs, his_vecs, label, global_model=global_model)
 
-        regularization_loss = 0.0
-        # 遍历模型的参数，这里以user_encoder和text_encoder为例
-        for param in agg.text_encoder.parameters():
-            regularization_loss += torch.sum(torch.abs(param))  # L1正则化
-        for param in agg.user_encoder.parameters():
-            regularization_loss += torch.sum(torch.abs(param))  # L1正则化
-        bz_loss += lambda_reg * regularization_loss
         loss += bz_loss.detach().cpu().numpy()
 
         optimizer.zero_grad()
@@ -221,7 +225,7 @@ def train_on_step(
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         candaidate_grad = candidate_news_vecs.grad.detach().cpu() * (
-            sample_num / user_sample
+                sample_num / user_sample
         )
         candidate_vecs = candidate_news_vecs.detach().cpu().numpy()
         candidate_news = candidate_news.numpy()
@@ -410,10 +414,12 @@ if __name__ == "__main__":
         news_dataset = NewsDataset(news_index)
 
         agg = Aggregator(args, news_dataset, news_index, device)
-        model = Model().to(device)
+        # 初始化Model类时传入正则化系数
+        model = Model(mu=0.0001).to(device)
+        global_model = Model(mu=0.0001).to(device)
         best_auc = 0
         # 初始化 random_ratio
-        random_ratio = 0.2
+        random_ratio = 0.8
         for step in range(args.max_train_steps):
             loss = train_on_step(
                 agg,
@@ -426,7 +432,8 @@ if __name__ == "__main__":
                 news_index,
                 device,
                 step,
-                random_ratio
+                random_ratio,
+                global_model
             )
 
             wandb.log({"train loss": loss}, step=step + 1)
@@ -470,6 +477,9 @@ if __name__ == "__main__":
 
                     with open(out_path / f"log.txt", "a") as f:
                         f.write(f"[{step}] round save model\n")
+
+            # 更新全局模型
+            global_model.load_state_dict(model.state_dict())
 
     elif args.mode == "test":
         data_path = Path(args.data_path) / args.data
